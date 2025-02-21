@@ -1,15 +1,15 @@
 import { EventEmitter } from 'events';
 import { Key, RootDatabase, Database, RootDatabaseOptions, DatabaseOptions } from 'lmdbx';
 
-interface PutOptions {
+type PutOptions = {
     version?: number;
     ttl?: number;
     ifVersion?: number;
-}
-interface RemoveOptions {
+};
+type RemoveOptions = {
     quiet?: boolean;
     ifVersion?: number;
-}
+};
 interface DefaultSerializer<V> {
     encoder: {
         encode: (value: V) => Buffer;

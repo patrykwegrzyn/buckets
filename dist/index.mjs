@@ -17,7 +17,6 @@ var Store = class extends EventEmitter {
   }
   // Patch a given database to wrap its put and remove methods.
   _patch(db, bucketName) {
-    console.log(db);
     const origPut = db.put.bind(db);
     const origRemove = db.remove.bind(db);
     const self = this;

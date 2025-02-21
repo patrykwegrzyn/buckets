@@ -8,16 +8,16 @@ import {
   RootDatabaseOptions,
 } from "lmdbx";
 
-export interface PutOptions {
+export type PutOptions = {
   version?: number;
   ttl?: number; // TTL in milliseconds
   ifVersion?: number;
-}
+};
 
-export interface RemoveOptions {
+export type RemoveOptions = {
   quiet?: boolean;
   ifVersion?: number;
-}
+};
 
 interface DefaultSerializer<V> {
   encoder: { encode: (value: V) => Buffer };
@@ -39,7 +39,6 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
     this.env = open(name, options);
     // Open TTL bucket directly (bypassing our patching logic).
     this.ttlBucket = this.env.openDB("ttl", { cache: true });
-    // this._patch(this.env, "root");
   }
 
   // Build a TTL key in the format "exp:bucket:key"
@@ -49,7 +48,6 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
 
   // Patch a given database to wrap its put and remove methods.
   protected _patch(db: DB, bucketName: string) {
-    console.log(db);
     const origPut = db.put.bind(db);
     const origRemove = db.remove.bind(db);
     const self = this;
@@ -75,8 +73,6 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
         self.ttlBucket.put(ttlEntryKey, "");
       }
 
-      // const serializer = db as any as DefaultSerializer;
-
       self.emit("change", {
         op: "put",
         bucket: bucketName,
@@ -95,6 +91,7 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
     ): Promise<boolean> => {
       let quiet = false;
       let version: number | undefined;
+
       if (typeof opts === "number") {
         version = opts;
       } else if (typeof opts === "object" && opts !== null) {
@@ -116,6 +113,7 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
       if (typeof opts === "object" && opts !== null && opts.quiet) {
         return origRemove(id, version);
       }
+
       return origRemove(id, opts as any);
     };
   }
@@ -123,12 +121,14 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
   // Retrieve or create a sub-database.
   bucket<TV = any>(name: string, options?: DatabaseOptions): DB<TV, K> {
     let db = this.dbs.get(name);
+
     if (!db) {
       const opts: DatabaseOptions = { cache: true, ...options };
       db = this.env.openDB<TV, K>(name, opts) as DB<TV, K>;
       this.dbs.set(name, db);
       this._patch(db, name);
     }
+
     return db;
   }
 
@@ -142,6 +142,7 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
       bucketName: string;
       id: string;
     }> = [];
+
     const now = Date.now().toString();
 
     for (const key of this.ttlBucket.getKeys({ end: now })) {
