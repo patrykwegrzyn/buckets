@@ -1,107 +1,58 @@
+// src/index.ts
 import { EventEmitter } from "events";
 import {
-  Database,
-  DatabaseOptions,
-  Key,
-  open,
-  RootDatabase,
-  RootDatabaseOptions,
+  open
 } from "lmdbx";
-
-export interface PutOptions {
-  version?: number;
-  ttl?: number; // TTL in milliseconds
-  ifVersion?: number;
-}
-
-export interface RemoveOptions {
-  quiet?: boolean;
-  ifVersion?: number;
-}
-
-interface DefaultSerializer<V> {
-  encoder: { encode: (value: V) => Buffer };
-  decoder: { encode: (value: V) => Buffer };
-}
-
-type DB<V = any, K extends Key = Key> = Database<V, K> & DefaultSerializer<V>;
-
-export class Store<V = any, K extends Key = Key> extends EventEmitter {
-  protected env: RootDatabase;
-  // Open the TTL bucket directly so it's not patched (and no events are emitted).
-  protected ttlBucket: Database<string, string>;
-  protected dbs: Map<string, DB<any, K>>;
-  protected flushing: boolean = false;
-
-  constructor(name: string, options: RootDatabaseOptions) {
+var Store = class extends EventEmitter {
+  constructor(name, options) {
     super();
-    this.dbs = new Map();
+    this.flushing = false;
+    this.dbs = /* @__PURE__ */ new Map();
     this.env = open(name, options);
-    // Open TTL bucket directly (bypassing our patching logic).
     this.ttlBucket = this.env.openDB("ttl", { cache: true });
-    // this._patch(this.env, "root");
   }
-
   // Build a TTL key in the format "exp:bucket:key"
-  protected ttlKey(exp: number, bucket: string, key: string): string {
+  ttlKey(exp, bucket, key) {
     return `${exp}:${bucket}:${key}`;
   }
-
   // Patch a given database to wrap its put and remove methods.
-  protected _patch(db: DB, bucketName: string) {
+  _patch(db, bucketName) {
     console.log(db);
     const origPut = db.put.bind(db);
     const origRemove = db.remove.bind(db);
     const self = this;
-
-    db.put = (
-      id: K,
-      value: V,
-      verOrOpts?: number | PutOptions,
-      ifVersion?: number
-    ) => {
-      let options: PutOptions = {};
+    db.put = (id, value, verOrOpts, ifVersion) => {
+      let options = {};
       if (typeof verOrOpts === "number") {
         options.version = verOrOpts;
       } else if (typeof verOrOpts === "object" && verOrOpts !== null) {
         options = verOrOpts;
       }
-
-      const result = origPut(id, value, options.version as number, ifVersion);
-
+      const result = origPut(id, value, options.version, ifVersion);
       if (options.ttl) {
         const exp = Date.now() + options.ttl;
         const ttlEntryKey = self.ttlKey(exp, bucketName, String(id));
         self.ttlBucket.put(ttlEntryKey, "");
       }
-
-      // const serializer = db as any as DefaultSerializer;
-
       self.emit("change", {
         op: "put",
         bucket: bucketName,
         id,
         value: db.encoder.encode(value),
         version: options.version,
-        ttl: options.ttl,
+        ttl: options.ttl
       });
-
       return result;
     };
-
-    db.remove = async (
-      id: K,
-      opts?: number | RemoveOptions
-    ): Promise<boolean> => {
+    db.remove = async (id, opts) => {
       let quiet = false;
-      let version: number | undefined;
+      let version;
       if (typeof opts === "number") {
         version = opts;
       } else if (typeof opts === "object" && opts !== null) {
         quiet = !!opts.quiet;
         version = opts.ifVersion;
       }
-
       if (!quiet) {
         const current = db.get(id);
         self.emit("change", {
@@ -109,41 +60,32 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
           bucket: bucketName,
           id,
           value: current,
-          version,
+          version
         });
       }
-
       if (typeof opts === "object" && opts !== null && opts.quiet) {
         return origRemove(id, version);
       }
-      return origRemove(id, opts as any);
+      return origRemove(id, opts);
     };
   }
-
   // Retrieve or create a sub-database.
-  bucket<TV = any>(name: string, options?: DatabaseOptions): DB<TV, K> {
+  bucket(name, options) {
     let db = this.dbs.get(name);
     if (!db) {
-      const opts: DatabaseOptions = { cache: true, ...options };
-      db = this.env.openDB<TV, K>(name, opts) as DB<TV, K>;
+      const opts = { cache: true, ...options };
+      db = this.env.openDB(name, opts);
       this.dbs.set(name, db);
       this._patch(db, name);
     }
     return db;
   }
-
   // Clean up expired TTL entries in batch.
   async clean() {
     if (this.flushing) return;
     this.flushing = true;
-
-    const keysToDelete: Array<{
-      ttlKey: string;
-      bucketName: string;
-      id: string;
-    }> = [];
+    const keysToDelete = [];
     const now = Date.now().toString();
-
     for (const key of this.ttlBucket.getKeys({ end: now })) {
       const parts = key.split(":");
       if (parts.length < 3) continue;
@@ -151,16 +93,17 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
       const id = parts.slice(2).join(":");
       keysToDelete.push({ ttlKey: key, bucketName, id });
     }
-
-    // Batch removal using a transaction
     await this.env.transaction(() => {
       for (const { ttlKey, bucketName, id } of keysToDelete) {
         const bucket = this.bucket(bucketName);
-        bucket.remove(id as K, { quiet: true });
+        bucket.remove(id, { quiet: true });
         this.ttlBucket.remove(ttlKey);
       }
     });
-
     this.flushing = false;
   }
-}
+};
+export {
+  Store
+};
+//# sourceMappingURL=index.mjs.map
