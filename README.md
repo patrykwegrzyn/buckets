@@ -1,4 +1,4 @@
-# Bucketize
+# Buckets
 
 `buckets` is a library built on top of [`lmdbx`](https://www.npmjs.com/package/lmdbx), providing a bucket-based abstraction for managing databases with global change tracking.
 

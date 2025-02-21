@@ -21,7 +21,7 @@ export type RemoveOptions = {
 
 interface DefaultSerializer<V> {
   encoder: { encode: (value: V) => Buffer };
-  decoder: { encode: (value: V) => Buffer };
+  decoder: { encode: (value: Buffer) => V };
 }
 
 type DB<V = any, K extends Key = Key> = Database<V, K> & DefaultSerializer<V>;

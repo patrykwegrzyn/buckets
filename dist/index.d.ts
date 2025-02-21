@@ -15,7 +15,7 @@ interface DefaultSerializer<V> {
         encode: (value: V) => Buffer;
     };
     decoder: {
-        encode: (value: V) => Buffer;
+        encode: (value: Buffer) => V;
     };
 }
 type DB<V = any, K extends Key = Key> = Database<V, K> & DefaultSerializer<V>;
