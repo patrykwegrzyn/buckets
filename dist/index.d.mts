@@ -5,6 +5,7 @@ type PutOptions = {
     version?: number;
     ttl?: number;
     ifVersion?: number;
+    quiet?: boolean;
 };
 type RemoveOptions = {
     quiet?: boolean;

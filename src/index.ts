@@ -12,6 +12,7 @@ export type PutOptions = {
   version?: number;
   ttl?: number; // TTL in milliseconds
   ifVersion?: number;
+  quiet?: boolean;
 };
 
 export type RemoveOptions = {
@@ -59,10 +60,12 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
       ifVersion?: number
     ) => {
       let options: PutOptions = {};
+      let quiet = false;
       if (typeof verOrOpts === "number") {
         options.version = verOrOpts;
       } else if (typeof verOrOpts === "object" && verOrOpts !== null) {
         options = verOrOpts;
+        quiet = !!verOrOpts.quiet;
       }
 
       const result = origPut(id, value, options.version as number, ifVersion);
@@ -73,14 +76,16 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
         self.ttlBucket.put(ttlEntryKey, "");
       }
 
-      self.emit("change", {
-        op: "put",
-        bucket: bucketName,
-        id,
-        value: db.encoder.encode(value),
-        version: options.version,
-        ttl: options.ttl,
-      });
+      if (!quiet) {
+        self.emit("change", {
+          op: "put",
+          bucket: bucketName,
+          id,
+          value: db.encoder.encode(value),
+          version: options.version,
+          ttl: options.ttl,
+        });
+      }
 
       return result;
     };
