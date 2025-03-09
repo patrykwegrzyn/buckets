@@ -6,7 +6,7 @@ import {
   open,
   RootDatabase,
   RootDatabaseOptions,
-} from "lmdbx";
+} from "lmdb";
 
 export type PutOptions = {
   version?: number;

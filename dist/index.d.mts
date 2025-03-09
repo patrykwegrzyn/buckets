@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Key, Database, RootDatabase, RootDatabaseOptions, DatabaseOptions } from 'lmdbx';
+import { Key, Database, RootDatabase, RootDatabaseOptions, DatabaseOptions } from 'lmdb';
 
 type PutOptions = {
     version?: number;
