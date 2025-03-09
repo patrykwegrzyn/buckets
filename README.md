@@ -1,13 +1,14 @@
 # Buckets
 
-`buckets` is a library built on top of [`lmdbx`](https://www.npmjs.com/package/lmdbx), providing a bucket-based abstraction for managing databases with global change tracking.
+`buckets` is a library built on top of [`lmdbx`](https://www.npmjs.com/package/lmdbx), providing a bucket-based abstraction for managing databases with global change tracking and support for TTL (time-to-live) entries.
 
 ## ✨ Features
 
 - Bucket-based database organization
 - Global change notifications (`put` and `remove`) for all buckets
 - Type-safe API for keys and values
-- Efficient storage using lmdbx
+- TTL support for expiring entries
+- Efficient storage using LMDBx
 
 ## 📦 Installation
 
@@ -21,14 +22,13 @@ npm install patrykwegrzyn/buckets
 import { Store } from "buckets";
 
 // Create a new Store
-const store = new Store("all-data");
+const store = new Store("all-data", {});
 
 // Create a bucket (database namespace)
-
 type User = {
   name: string;
   age: number;
-}
+};
 
 const users = store.bucket<User>("users");
 
@@ -37,8 +37,8 @@ store.on("change", (change) => {
   console.log("Change detected:", change);
 });
 
-// Add a user
-await users.put("user:1", { name: "Alice", age: 30 });
+// Add a user with TTL
+await users.put("user:1", { name: "Alice", age: 30 }, { ttl: 60000 }); // Expires in 60s
 
 // Retrieve a user
 const user = users.get("user:1");
@@ -64,6 +64,9 @@ Creates or retrieves a bucket (database namespace).
 - `name` - Name of the bucket.
 - `options` - LMDB database options.
 
+#### `store.clean()`
+Cleans up expired TTL entries.
+
 #### Events
 
 - `change` - Emitted when `put` or `remove` operations occur.
@@ -77,11 +80,12 @@ store.on("change", (event) => {
 Event object:
 ```typescript
 {
-  type: "put" | "remove";
+  op: "put" | "remove";
   bucket: string;
   id: string;
   value: any;
   version?: number;
+  ttl?: number;
 }
 ```
 
@@ -89,6 +93,14 @@ Event object:
 
 - `cache` - Enables caching for faster lookups.
 - `path` - Path to store LMDB files.
+
+## 🕒 TTL Support
+
+Entries can have a time-to-live (TTL) in milliseconds. Expired entries are automatically removed when `store.clean()` is called.
+
+```typescript
+await users.put("user:1", { name: "Alice", age: 30 }, { ttl: 30000 }); // Expires in 30s
+```
 
 ## ⚖️ License
 
