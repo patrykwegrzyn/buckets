@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Key, Database, RootDatabase, RootDatabaseOptions, DatabaseOptions } from 'lmdb';
+import { Key, Database, RootDatabase, RootDatabaseOptions, DatabaseOptions } from 'lmdbx';
 
 type PutOptions = {
     version?: number;
@@ -19,16 +19,22 @@ interface DefaultSerializer<V> {
         encode: (value: Buffer) => V;
     };
 }
+type BucketOptions = DatabaseOptions & {
+    indexes?: string[];
+};
 type DB<V = any, K extends Key = Key> = Database<V, K> & DefaultSerializer<V>;
 interface WrappedDB<V = any, K extends Key = Key> extends Omit<Database<V, K>, "put" | "remove">, DefaultSerializer<V> {
     put(id: K, value: V, options?: PutOptions): Promise<boolean>;
     remove(id: K, options?: RemoveOptions): Promise<boolean>;
+    query(indexName: string, value: any): Promise<V[]>;
 }
 declare class Store<V = any, K extends Key = Key> extends EventEmitter {
     protected env: RootDatabase;
     protected ttlBucket: Database<string, string>;
+    protected indexDb: Database<string, K>;
     protected dbs: Map<string, WrappedDB<any, K>>;
     protected flushing: boolean;
+    protected indexes: Map<string, string[]>;
     constructor(name: string, options: RootDatabaseOptions);
     protected ttlKey(exp: number, bucket: string, key: string): string;
     /**
@@ -37,16 +43,18 @@ declare class Store<V = any, K extends Key = Key> extends EventEmitter {
      * but we override put and remove with our custom implementations.
      */
     protected wrapDB<TV>(db: DB<TV, K>, bucketName: string): WrappedDB<TV, K>;
+    private indexKey;
     /**
      * Retrieve or create a sub-database.
      * The returned instance is wrapped so that our custom put/remove
      * (with TTL and change event functionality) are available.
      */
-    bucket<TV = any>(name: string, options?: DatabaseOptions): WrappedDB<TV, K>;
+    bucket<TV = any>(name: string, options?: BucketOptions): WrappedDB<TV, K>;
     /**
      * Clean up expired TTL entries in batch.
      */
     clean(): Promise<void>;
+    close(): Promise<void>;
 }
 
 export { type PutOptions, type RemoveOptions, Store, type WrappedDB };
