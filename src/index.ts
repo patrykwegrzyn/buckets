@@ -10,7 +10,7 @@ import {
 
 export type PutOptions = {
   version?: number;
-  ttl?: number; // TTL in milliseconds
+  ttl?: number;
   ifVersion?: number;
   quiet?: boolean;
 };
@@ -21,18 +21,21 @@ export type RemoveOptions = {
 };
 
 interface DefaultSerializer<V> {
-  encoder: { encode: (value: V) => Buffer };
-  decoder: { encode: (value: Buffer) => V };
+  encoder: { encode: (value: V) => Buffer | string };
+  decoder: { decode: (value: Buffer | string) => V };
+  encoding: string;
 }
 
-type BucketOptions = DatabaseOptions & {
+export type ExtendedRootDb = RootDatabase & {
+  committed: () => Promise<void>;
+};
+
+export type BucketOptions = DatabaseOptions & {
   indexes?: string[];
 };
 
-// This is the original LMDBx DB type plus our serializer.
 type DB<V = any, K extends Key = Key> = Database<V, K> & DefaultSerializer<V>;
 
-// Define our wrapped DB interface: we omit the original put/remove and add our simplified versions.
 export interface WrappedDB<V = any, K extends Key = Key>
   extends Omit<Database<V, K>, "put" | "remove">,
     DefaultSerializer<V> {
@@ -42,8 +45,7 @@ export interface WrappedDB<V = any, K extends Key = Key>
 }
 
 export class Store<V = any, K extends Key = Key> extends EventEmitter {
-  protected env: RootDatabase;
-  // Open the TTL bucket directly so it's not wrapped.
+  protected env: ExtendedRootDb;
   protected ttlBucket: Database<string, string>;
   protected indexDb: Database<string, K>;
   protected dbs = new Map<string, WrappedDB<any, K>>();
@@ -52,80 +54,72 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
 
   constructor(name: string, options: RootDatabaseOptions) {
     super();
-    this.env = open(name, options);
+    this.env = open(name, options) as ExtendedRootDb;
     // Open TTL bucket directly.
     this.ttlBucket = this.env.openDB("ttl", { cache: true });
     this.indexDb = this.env.openDB("index", { cache: true });
   }
 
-  // Build a TTL key in the format "exp:bucket:key"
   protected ttlKey(exp: number, bucket: string, key: string): string {
     return `${exp}:${bucket}:${key}`;
   }
 
+  async committed() {
+    return this.env.committed;
+  }
+
   /**
-   * Wrap a given DB instance using a levelup-style approach.
-   * All methods and properties are available via the prototype,
-   * but we override put and remove with our custom implementations.
+   * Wrap a raw DB so that it supports custom put, remove, and query logic.
    */
   protected wrapDB<TV>(db: DB<TV, K>, bucketName: string): WrappedDB<TV, K> {
-    const self = this;
-    // Start with a Partial of our WrappedDB, using Object.create to inherit original methods.
     const wrapped: Partial<WrappedDB<TV, K>> = Object.create(db);
 
-    wrapped.query = async function (indexName: string, value: any) {
-      console.log("query", indexName, value);
+    wrapped.query = async (indexName: string, value: any) => {
       const keys: K[] = [];
-      const prefix = self.indexKey(bucketName, indexName, value);
-      for (let { key, value } of self.indexDb.getRange({
+      const prefix = this.indexKey(bucketName, indexName, value);
+      for (const { value: idxValue } of this.indexDb.getRange({
         start: prefix,
         end: `${prefix}\xff`,
       })) {
-        console.log({ key, value });
-        keys.push(value as K);
-        // for each key-value pair in the given range
+        keys.push(idxValue as K);
       }
-
       const results = await db.getMany(keys);
       return results.filter((item): item is TV => item !== undefined);
     };
 
-    // Override put with our custom logic and proper type annotation.
-    wrapped.put = function (
+    wrapped.put = (
       id: K,
       value: TV,
       options?: PutOptions
-    ): Promise<boolean> {
+    ): Promise<boolean> => {
       let result: Promise<boolean>;
-      if (
-        options &&
-        options.version !== undefined &&
-        options.ifVersion !== undefined
-      ) {
+      if (options?.version !== undefined && options.ifVersion !== undefined) {
         result = db.put(id, value, options.version, options.ifVersion);
-      } else if (options && options.version !== undefined) {
+      } else if (options?.version !== undefined) {
         result = db.put(id, value, options.version);
       } else {
         result = db.put(id, value);
       }
 
+      // Handle TTL: if ttl option is provided, schedule deletion by adding a TTL entry.
       if (options?.ttl) {
         const exp = Date.now() + options.ttl;
-        const ttlEntryKey = self.ttlKey(exp, bucketName, String(id));
-        self.ttlBucket.put(ttlEntryKey, "");
+        const ttlEntryKey = this.ttlKey(exp, bucketName, String(id));
+        this.ttlBucket.put(ttlEntryKey, "");
       }
 
-      const _indexKeys = self.indexes.get(bucketName);
-      if (_indexKeys) {
-        for (const k of _indexKeys) {
-          const indexVal = (value as any)[k];
-          const composite = self.indexKey(bucketName, k, indexVal, id as any);
-          self.indexDb.put(composite as K, String(id));
+      // Handle indexes if defined.
+      const indexKeys = this.indexes.get(bucketName);
+      if (indexKeys) {
+        for (const key of indexKeys) {
+          const indexVal = (value as any)[key];
+          const composite = this.indexKey(bucketName, key, indexVal, id as any);
+          this.indexDb.put(composite as K, String(id));
         }
       }
 
       if (!options?.quiet) {
-        self.emit("change", {
+        this.emit("change", {
           op: "put",
           bucket: bucketName,
           id,
@@ -137,25 +131,20 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
       return result;
     };
 
-    // Override remove with our custom logic and proper type annotation.
-    wrapped.remove = function (
-      id: K,
-      options?: RemoveOptions
-    ): Promise<boolean> {
-      const _indexKeys = self.indexes.get(bucketName);
+    wrapped.remove = (id: K, options?: RemoveOptions): Promise<boolean> => {
+      const current = db.get(id);
 
-      if (_indexKeys) {
-        const current = db.get(id);
-        for (const k of _indexKeys) {
-          const indexVal = (current as any)[k];
-          const composite = self.indexKey(bucketName, k, indexVal, id as any);
-          self.indexDb.remove(composite as K);
+      const indexKeys = this.indexes.get(bucketName);
+      if (indexKeys && current) {
+        for (const key of indexKeys) {
+          const indexVal = (current as any)[key];
+          const composite = this.indexKey(bucketName, key, indexVal, id as any);
+          this.indexDb.remove(composite as K);
         }
       }
 
       if (!options?.quiet) {
-        const current = db.get(id);
-        self.emit("change", {
+        this.emit("change", {
           op: "remove",
           bucket: bucketName,
           id,
@@ -167,22 +156,23 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
       if (options?.ifVersion !== undefined) {
         return db.remove(id, options.ifVersion);
       }
-
       return db.remove(id);
     };
 
-    // Return the wrapped object cast to WrappedDB.
     return wrapped as WrappedDB<TV, K>;
   }
 
-  private indexKey(bucket: string, index: string, value: any, key = "") {
-    return `${bucket}:${index}:${value}:${key}`;
+  /**
+   * Generate a composite index key.
+   * This implementation uses a simple colon-delimited string,
+   * omitting undefined parts.
+   */
+  private indexKey(bucket: string, index: string, value: any, key?: string) {
+    return [bucket, index, value, key].filter((v) => v !== undefined).join(":");
   }
 
   /**
-   * Retrieve or create a sub-database.
-   * The returned instance is wrapped so that our custom put/remove
-   * (with TTL and change event functionality) are available.
+   * Open or create a bucket in the store.
    */
   bucket<TV = any>(name: string, options?: BucketOptions): WrappedDB<TV, K> {
     let db = this.dbs.get(name);
@@ -199,7 +189,7 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
   }
 
   /**
-   * Clean up expired TTL entries in batch.
+   * Clean expired entries based on TTL.
    */
   async clean() {
     if (this.flushing) return;
@@ -210,9 +200,9 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
       bucketName: string;
       id: string;
     }> = [];
-    const now = Date.now().toString();
+    const nowStr = Date.now().toString();
 
-    for (const key of this.ttlBucket.getKeys({ end: now })) {
+    for (const key of this.ttlBucket.getKeys({ end: nowStr })) {
       const parts = key.split(":");
       if (parts.length < 3) continue;
       const bucketName = parts[1];
@@ -231,6 +221,9 @@ export class Store<V = any, K extends Key = Key> extends EventEmitter {
     this.flushing = false;
   }
 
+  /**
+   * Close all open databases.
+   */
   async close() {
     const dbs = Array.from(this.dbs.values()).map((db) => db.close());
     await Promise.all([...dbs, this.env.close(), this.ttlBucket.close()]);

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Key, Database, RootDatabase, RootDatabaseOptions, DatabaseOptions } from 'lmdbx';
+import { RootDatabase, DatabaseOptions, Key, Database, RootDatabaseOptions } from 'lmdbx';
 
 type PutOptions = {
     version?: number;
@@ -13,12 +13,16 @@ type RemoveOptions = {
 };
 interface DefaultSerializer<V> {
     encoder: {
-        encode: (value: V) => Buffer;
+        encode: (value: V) => Buffer | string;
     };
     decoder: {
-        encode: (value: Buffer) => V;
+        decode: (value: Buffer | string) => V;
     };
+    encoding: string;
 }
+type ExtendedRootDb = RootDatabase & {
+    committed: () => Promise<void>;
+};
 type BucketOptions = DatabaseOptions & {
     indexes?: string[];
 };
@@ -29,7 +33,7 @@ interface WrappedDB<V = any, K extends Key = Key> extends Omit<Database<V, K>, "
     query(indexName: string, value: any): Promise<V[]>;
 }
 declare class Store<V = any, K extends Key = Key> extends EventEmitter {
-    protected env: RootDatabase;
+    protected env: ExtendedRootDb;
     protected ttlBucket: Database<string, string>;
     protected indexDb: Database<string, K>;
     protected dbs: Map<string, WrappedDB<any, K>>;
@@ -37,24 +41,29 @@ declare class Store<V = any, K extends Key = Key> extends EventEmitter {
     protected indexes: Map<string, string[]>;
     constructor(name: string, options: RootDatabaseOptions);
     protected ttlKey(exp: number, bucket: string, key: string): string;
+    committed(): Promise<() => Promise<void>>;
     /**
-     * Wrap a given DB instance using a levelup-style approach.
-     * All methods and properties are available via the prototype,
-     * but we override put and remove with our custom implementations.
+     * Wrap a raw DB so that it supports custom put, remove, and query logic.
      */
     protected wrapDB<TV>(db: DB<TV, K>, bucketName: string): WrappedDB<TV, K>;
+    /**
+     * Generate a composite index key.
+     * This implementation uses a simple colon-delimited string,
+     * omitting undefined parts.
+     */
     private indexKey;
     /**
-     * Retrieve or create a sub-database.
-     * The returned instance is wrapped so that our custom put/remove
-     * (with TTL and change event functionality) are available.
+     * Open or create a bucket in the store.
      */
     bucket<TV = any>(name: string, options?: BucketOptions): WrappedDB<TV, K>;
     /**
-     * Clean up expired TTL entries in batch.
+     * Clean expired entries based on TTL.
      */
     clean(): Promise<void>;
+    /**
+     * Close all open databases.
+     */
     close(): Promise<void>;
 }
 
-export { type PutOptions, type RemoveOptions, Store, type WrappedDB };
+export { type BucketOptions, type ExtendedRootDb, type PutOptions, type RemoveOptions, Store, type WrappedDB };
