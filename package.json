@@ -1,0 +1,21 @@
+{
+  "name": "buckets",
+  "version": "1.0.0",
+  "description": "Fastest embedded KV store for Node.js — mmap, zero-copy, zero-GC hot paths",
+  "main": "index.js",
+  "module": "index.mjs",
+  "exports": {
+    ".": {
+      "import": "./index.mjs",
+      "require": "./index.js"
+    }
+  },
+  "scripts": {
+    "test": "node --test test.js",
+    "bench": "node bench.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "mmap-native": "github:patrykwegrzyn/mmap"
+  }
+}
