@@ -56,6 +56,7 @@ function mmSlice(mm, off, len) {
 class BucketsDB {
   constructor(dir, opts = {}) {
     this._dir = dir
+    this._readOnly = !!opts.readOnly
 
     let capacity = opts.capacity || DEFAULT_CAPACITY
     capacity = 1 << Math.ceil(Math.log2(Math.max(capacity, 16)))
@@ -168,6 +169,7 @@ class BucketsDB {
   // ---- PUT — in-place overwrite via mmap when value fits ----
 
   put(key, value, opts) {
+    this._assertWritable()
     this._gen++
     if (typeof key === 'string') key = Buffer.from(key)
     if (typeof value === 'string') value = Buffer.from(value)
@@ -263,6 +265,7 @@ class BucketsDB {
   // ---- DELETE ----
 
   delete(key) {
+    this._assertWritable()
     this._gen++
     if (typeof key === 'string') key = Buffer.from(key)
     const kLen = key.length
@@ -502,6 +505,7 @@ class BucketsDB {
   get count() { return this.size }
 
   clear() {
+    this._assertWritable()
     this._flags.fill(0)
     this._expiries.fill(0)
     this.size = 0
@@ -596,7 +600,7 @@ class BucketsDB {
   // ---- Persistence ----
 
   flush() {
-    if (this._dataFd === null) return
+    if (this._readOnly || this._dataFd === null) return
     this._flushWrite()
     fs.fsyncSync(this._dataFd)
     this._saveIndex()
@@ -623,6 +627,7 @@ class BucketsDB {
   }
 
   compact() {
+    this._assertWritable()
     if (this._dataFd === null) return
     this._flushWrite()
     this.reap()
@@ -735,7 +740,12 @@ class BucketsDB {
     this._dataSize += total
   }
 
+  _assertWritable() {
+    if (this._readOnly) throw new Error('Buckets: database opened read-only')
+  }
+
   _flushWrite() {
+    this._assertWritable()
     if (this._wPos > 0 && this._dataFd !== null) {
       fs.writeSync(this._dataFd, this._wBuf, 0, this._wPos, this._diskSize)
       this._diskSize += this._wPos
@@ -787,7 +797,7 @@ class BucketsDB {
     if (this._diskSize > 0 && this._diskSize > this._mmapSize) {
       mmapDestroy(this._mmapBuf)
       const src = IS_BUN ? this._dataPath : this._dataFd
-      this._mmapBuf = mmapCreate(src, this._diskSize, true)
+      this._mmapBuf = mmapCreate(src, this._diskSize, !this._readOnly)
       this._mmapSize = this._diskSize
     }
   }
@@ -795,13 +805,13 @@ class BucketsDB {
   // ---- Index persistence ----
 
   _openDir() {
-    fs.mkdirSync(this._dir, { recursive: true })
-    this._acquireLock()
+    if (!this._readOnly) fs.mkdirSync(this._dir, { recursive: true })
+    if (!this._readOnly) this._acquireLock()      // read-only opens share the snapshot (no lock)
     this._dataPath = path.join(this._dir, 'data.tdb')
     const idxPath = path.join(this._dir, 'index.tdb')
 
-    if (!fs.existsSync(this._dataPath)) fs.writeFileSync(this._dataPath, '')
-    this._dataFd = fs.openSync(this._dataPath, 'r+')
+    if (!this._readOnly && !fs.existsSync(this._dataPath)) fs.writeFileSync(this._dataPath, '')
+    this._dataFd = fs.openSync(this._dataPath, this._readOnly ? 'r' : 'r+')
 
     if (fs.existsSync(idxPath)) {
       this._loadIndex(idxPath)
